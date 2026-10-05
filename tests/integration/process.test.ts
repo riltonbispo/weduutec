@@ -7,6 +7,7 @@ import { createRedisConnection } from '../../src/lib/redis.js';
 import { createSkuQueue } from '../../src/queues/sku.queue.js';
 import type { SkuQueue } from '../../src/queues/sku.queue.js';
 import { ItemRepository } from '../../src/repositories/item.repository.js';
+import { createTestRedisConnection } from '../helpers/redis.js';
 
 const TEST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
 
@@ -16,7 +17,7 @@ let queue: SkuQueue;
 let itemRepository: ItemRepository;
 
 beforeAll(async () => {
-  redis = createRedisConnection(TEST_REDIS_URL);
+  redis = createTestRedisConnection(TEST_REDIS_URL);
   await redis.connect();
   queue = createSkuQueue(redis);
   itemRepository = new ItemRepository(redis);

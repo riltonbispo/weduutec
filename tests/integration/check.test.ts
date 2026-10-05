@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../src/app.js';
-import { createRedisConnection } from '../../src/lib/redis.js';
 import { createSkuQueue } from '../../src/queues/sku.queue.js';
+import { createTestRedisConnection } from '../helpers/redis.js';
 
-const redis = createRedisConnection('redis://127.0.0.1:6379/15');
+const redis = createTestRedisConnection(
+  process.env.TEST_CHECK_REDIS_URL ?? 'redis://127.0.0.1:6379/12',
+);
 const queue = createSkuQueue(redis);
 const app = buildApp({ redis, queue, logLevel: 'silent' });
 
