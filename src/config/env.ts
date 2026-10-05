@@ -3,7 +3,9 @@ import { z } from 'zod';
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  REDIS_URL: z.string().url().optional(),
+  REDIS_URL: z.string().url().default('redis://127.0.0.1:6379'),
+  REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(175),
+  REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(75),
   WEDUU_BASE_URL: z.string().url().optional(),
   WEDUU_CID: z.string().min(1).optional(),
   WEDUU_TOKEN: z.string().min(1).optional(),
