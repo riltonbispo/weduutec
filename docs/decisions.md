@@ -16,6 +16,8 @@
 **Consequências.**
 - Itens sobrevivem a restart do processo.
 - Retries com delay e backoff vêm da biblioteca, não de código próprio.
+- Jobs concluídos são removidos após uma hora ou ao exceder 1.000 registros; jobs falhos permanecem para diagnóstico. O estado durável continua no hash do item.
+- Os hashes de item deverão receber TTL após o encerramento do ciclo de vida. Para lotes de 20.000 SKUs, isso evita crescimento ilimitado do Redis sem apagar estado enquanto o run ainda está ativo.
 - **Se o lote tivesse 20.000 SKUs:** enfileirar em bulk (`addBulk`) e pipeline no Redis; manter o `/process` mínimo; limiter global de 3 (a API externa continua sendo o gargalo: 20.000 × ~0,6 s ÷ 3 ≈ 70 min); callback em partes ou com payload paginado se o contrato permitir; Redis com persistência (AOF) e dimensionamento de memória; métricas de fila (lag, taxa, falhas); múltiplos workers só com limiter distribuído.
 ---
  
