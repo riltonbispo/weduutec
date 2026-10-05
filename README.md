@@ -72,20 +72,20 @@ As opções do simulador estão em `MOCK_PORT`, `TOTAL`, `DUP_RATE`, `ERROR_RATE
 
 ## Configuração
 
-| Variável | Padrão | Uso |
-| --- | --- | --- |
-| `PORT` | `4000` | Porta da API |
-| `LOG_LEVEL` | `info` | Nível dos logs estruturados |
-| `REDIS_URL` | `redis://127.0.0.1:6379` | Redis/BullMQ |
-| `REDIS_COMMAND_TIMEOUT_MS` / `REDIS_CONNECT_TIMEOUT_MS` | `175` / `75` | Fail-fast do `/process` |
-| `WEDUU_BASE_URL` | sem padrão | URL da plataforma |
-| `WEDUU_CID` / `WEDUU_TOKEN` | sem padrão | Credenciais do worker |
-| `ENRICH_TIMEOUT_MS` | `5000` | Timeout do `/enrich` |
-| `ENRICH_MAX_ATTEMPTS` | `5` | Limite de tentativas transitórias |
-| `ENRICH_BACKOFF_BASE_MS` / `ENRICH_BACKOFF_MAX_MS` | `500` / `8000` | Backoff do enrich |
-| `ENRICH_RATE_LIMIT_MAX_WAITS` | `20` | Limite de esperas por `429` |
-| `CALLBACK_TIMEOUT_MS` / `CALLBACK_LEASE_MS` | `10000` / `30000` | Timeout e lease do callback |
-| `CALLBACK_MAX_ATTEMPTS` / `CALLBACK_BACKOFF_BASE_MS` | `5` / `1000` | Retry do callback |
-| `SWEEP_INTERVAL_MS` / `RUN_STALL_TIMEOUT_MS` | `2000` / `60000` | Varredura e detecção de lacunas |
+| Variável                                                | Padrão                   | Uso                               |
+| ------------------------------------------------------- | ------------------------ | --------------------------------- |
+| `PORT`                                                  | `4000`                   | Porta da API                      |
+| `LOG_LEVEL`                                             | `info`                   | Nível dos logs estruturados       |
+| `REDIS_URL`                                             | `redis://127.0.0.1:6379` | Redis/BullMQ                      |
+| `REDIS_COMMAND_TIMEOUT_MS` / `REDIS_CONNECT_TIMEOUT_MS` | `175` / `75`             | Fail-fast do `/process`           |
+| `WEDUU_BASE_URL`                                        | sem padrão               | URL da plataforma                 |
+| `WEDUU_CID` / `WEDUU_TOKEN`                             | sem padrão               | Credenciais do worker             |
+| `ENRICH_TIMEOUT_MS`                                     | `5000`                   | Timeout do `/enrich`              |
+| `ENRICH_MAX_ATTEMPTS`                                   | `5`                      | Limite de tentativas transitórias |
+| `ENRICH_BACKOFF_BASE_MS` / `ENRICH_BACKOFF_MAX_MS`      | `500` / `8000`           | Backoff do enrich                 |
+| `ENRICH_RATE_LIMIT_MAX_WAITS`                           | `20`                     | Limite de esperas por `429`       |
+| `CALLBACK_TIMEOUT_MS` / `CALLBACK_LEASE_MS`             | `10000` / `30000`        | Timeout e lease do callback       |
+| `CALLBACK_MAX_ATTEMPTS` / `CALLBACK_BACKOFF_BASE_MS`    | `5` / `1000`             | Retry do callback                 |
+| `SWEEP_INTERVAL_MS` / `RUN_STALL_TIMEOUT_MS`            | `2000` / `60000`         | Varredura e detecção de lacunas   |
 
 Detalhes: [decisões arquiteturais](docs/decisions.md) e [roteiro de entrega](docs/entrega.md).

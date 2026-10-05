@@ -20,6 +20,7 @@ function createServiceWithReceiveError(error: Error): ProcessMessageService {
   };
   const queue: SkuQueueWriter = {
     add: vi.fn(() => Promise.resolve(undefined)),
+    getJob: vi.fn(() => Promise.resolve(undefined)),
   };
 
   return new ProcessMessageService(repository, queue);

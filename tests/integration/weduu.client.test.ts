@@ -27,51 +27,47 @@ afterAll(async () => {
 });
 
 describe('WeduuClient with the mock platform', () => {
-  it(
-    'keeps 20 requests within the server concurrency limit without 429 responses',
-    async () => {
-      const platform = createMockPlatform({
-        port: 0,
-        total: 20,
-        dupRate: 0,
-        errorRate: 0,
-        seed: 42,
-        printReports: false,
+  it('keeps 20 requests within the server concurrency limit without 429 responses', async () => {
+    const platform = createMockPlatform({
+      port: 0,
+      total: 20,
+      dupRate: 0,
+      errorRate: 0,
+      seed: 42,
+      printReports: false,
+    });
+
+    try {
+      const platformUrl = await platform.start();
+      const registrationResponse = await fetch(`${platformUrl}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'WeduuClient integration', webhook: webhookUrl }),
+      });
+      const credentials = credentialsSchema.parse(await registrationResponse.json());
+      const burstResponse = await fetch(`${platformUrl}/burst/${credentials.cid}`, {
+        method: 'POST',
+        headers: { 'x-token': credentials.token },
+      });
+      const run = runSchema.parse(await burstResponse.json());
+      await platform.waitForDispatch(run.run_id);
+      const client = new WeduuClient({
+        baseUrl: platformUrl,
+        cid: credentials.cid,
+        token: credentials.token,
+        timeoutMs: 2_000,
       });
 
-      try {
-        const platformUrl = await platform.start();
-        const registrationResponse = await fetch(`${platformUrl}/register`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name: 'WeduuClient integration', webhook: webhookUrl }),
-        });
-        const credentials = credentialsSchema.parse(await registrationResponse.json());
-        const burstResponse = await fetch(`${platformUrl}/burst/${credentials.cid}`, {
-          method: 'POST',
-          headers: { 'x-token': credentials.token },
-        });
-        const run = runSchema.parse(await burstResponse.json());
-        await platform.waitForDispatch(run.run_id);
-        const client = new WeduuClient({
-          baseUrl: platformUrl,
-          cid: credentials.cid,
-          token: credentials.token,
-          timeoutMs: 2_000,
-        });
+      const results = await Promise.all(
+        Array.from({ length: 20 }, async (_, seq) => await client.enrich(skuForSeq(seq))),
+      );
 
-        const results = await Promise.all(
-          Array.from({ length: 20 }, async (_, seq) => await client.enrich(skuForSeq(seq))),
-        );
-
-        expect(results).toHaveLength(20);
-        expect(platform.metrics.enrichByStatus[200]).toBe(20);
-        expect(platform.metrics.enrichByStatus[429]).toBe(0);
-        expect(platform.metrics.peakEnrichInFlight).toBeLessThanOrEqual(3);
-      } finally {
-        await platform.stop();
-      }
-    },
-    15_000,
-  );
+      expect(results).toHaveLength(20);
+      expect(platform.metrics.enrichByStatus[200]).toBe(20);
+      expect(platform.metrics.enrichByStatus[429]).toBe(0);
+      expect(platform.metrics.peakEnrichInFlight).toBeLessThanOrEqual(3);
+    } finally {
+      await platform.stop();
+    }
+  }, 15_000);
 });

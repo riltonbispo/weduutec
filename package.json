@@ -21,7 +21,8 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "format": "prettier --check ."
+    "format": "prettier --check .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "bullmq": "^6.3.11",

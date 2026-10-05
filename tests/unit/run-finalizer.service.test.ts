@@ -30,9 +30,7 @@ function setup(claim: Awaited<ReturnType<FinalizerRunRepositoryPort['claimCallba
     getFailedCount: () => 1,
   };
   const client: CallbackClientPort = {
-    sendCallback: vi.fn(() =>
-      Promise.resolve({ statusCode: 200, body: '{"status":"received"}' }),
-    ),
+    sendCallback: vi.fn(() => Promise.resolve({ statusCode: 200, body: '{"status":"received"}' })),
   };
   const reportWriter = vi.fn(() => Promise.resolve('/tmp/run-1__attempt-1.json'));
   const logger = { info: vi.fn(), error: vi.fn() };

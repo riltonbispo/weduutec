@@ -77,7 +77,7 @@ return 0
 
 const MARK_PROCESSING_SCRIPT = `
 local status = redis.call('HGET', KEYS[1], 'status')
-if status == 'queued' or status == 'processing' then
+if status == 'received' or status == 'queued' or status == 'processing' then
   redis.call('HSET', KEYS[1], 'status', 'processing', 'started_at', ARGV[1])
   redis.call('HINCRBY', KEYS[1], 'attempts', 1)
   return 1

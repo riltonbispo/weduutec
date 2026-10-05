@@ -1,4 +1,5 @@
 import { Queue } from 'bullmq';
+import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
 export const SKU_QUEUE_NAME = 'sku-enrich';
@@ -14,6 +15,7 @@ export type SkuQueue = Queue<SkuJobData, void, typeof SKU_JOB_NAME>;
 
 export interface SkuQueueWriter {
   add(name: typeof SKU_JOB_NAME, data: SkuJobData, options: { jobId: string }): Promise<unknown>;
+  getJob(jobId: string): Promise<Job<SkuJobData, void, typeof SKU_JOB_NAME> | undefined>;
 }
 
 export interface SkuQueueOptions {
@@ -42,4 +44,18 @@ export async function enqueueSku(queue: SkuQueueWriter, data: SkuJobData): Promi
   await queue.add(SKU_JOB_NAME, data, {
     jobId: `${data.runId}_${String(data.seq)}`,
   });
+}
+
+export async function ensureSkuJob(queue: SkuQueueWriter, data: SkuJobData): Promise<void> {
+  const jobId = `${data.runId}_${String(data.seq)}`;
+  const job = await queue.getJob(jobId);
+
+  if (job === undefined) {
+    await enqueueSku(queue, data);
+    return;
+  }
+
+  if ((await job.getState()) === 'failed') {
+    await job.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
+  }
 }

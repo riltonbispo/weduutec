@@ -1,5 +1,5 @@
 import type { SkuQueueWriter } from '../queues/sku.queue.js';
-import { enqueueSku } from '../queues/sku.queue.js';
+import { enqueueSku, ensureSkuJob } from '../queues/sku.queue.js';
 import type { ReceiveItemResult } from '../repositories/item.repository.js';
 import type { ProcessBody } from '../schemas/process.schema.js';
 
@@ -65,16 +65,21 @@ export class ProcessMessageService implements ProcessMessageHandler {
   async process(message: ProcessBody): Promise<void> {
     try {
       const item = await this.itemRepository.receiveItem(message.run_id, message.seq, message.sku);
-
-      if (!item.created && item.status !== 'received') {
-        return;
-      }
-
-      await enqueueSku(this.queue, {
+      const jobData = {
         runId: message.run_id,
         seq: message.seq,
         sku: message.sku,
-      });
+      };
+
+      if (!item.created && item.status !== 'received' && item.status !== 'queued') {
+        return;
+      }
+
+      if (item.created) {
+        await enqueueSku(this.queue, jobData);
+      } else {
+        await ensureSkuJob(this.queue, jobData);
+      }
       await this.itemRepository.markQueued(message.run_id, message.seq);
     } catch (error) {
       if (isRedisUnavailableError(error)) {
