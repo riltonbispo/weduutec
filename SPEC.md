@@ -275,6 +275,9 @@ No máximo **3 requisições simultâneas** podem estar em voo para `/enrich`.
 
 O limite é global para o processo inteiro, e não por `run_id`.
 
+- Usar `fetch` nativo com `AbortSignal.timeout(ENRICH_TIMEOUT_MS)`, padrão **5000 ms** (a latência normal é 400–800 ms).
+- Atenção: abortar no cliente não cancela a requisição no servidor; ela pode continuar contando como "em voo" e gerar `429` espúrio. O timeout deve ser folgado.
+
 ---
 
 ## 10. Endpoint consumido — `POST /callback`
@@ -378,21 +381,23 @@ Não é permitido aplicar `concurrency = 3` separadamente por execução caso is
 - registrar o motivo da falha;
 - resolver o item como falha definitiva/visível conforme o modelo adotado.
 
-## I5. Callback somente após resolução completa
+- `429` **não consome** tentativas reservadas ao `500`; limite separado de "rate limit waits" (sugestão: 20) para evitar espera infinita.
+- Timeout de rede/abort conta como `transient`.
+- Tentativas máximas para `500`/timeout: **5** (sugestão), com backoff exponencial base 500 ms + jitter.
 
-Para uma execução cujo `total = N`, o callback só pode ser disparado quando todos os índices:
+## I5. Callback com estados e claim atômico
 
-```text
-0 .. N-1
-```
-
-estiverem resolvidos.
-
-Antes do callback:
-
-- confirmar que não há lacunas de `seq`;
-- ordenar o resultado por `seq`;
-- garantir que o callback ainda não foi enviado para essa conclusão.
+Para um run com `total = N`, o callback só é disparado quando todos os `seq` de `0..N-1` estiverem **resolvidos** (`completed` ou `failed`).
+ 
+Fluxo:
+ 
+1. Avaliar conclusão (todos os seq resolvidos, sem lacuna).
+2. Fazer **claim atômico** `pending -> sending` (Lua ou `SET NX`). Só quem obtém o claim envia.
+3. Montar o payload ordenado por `seq` e chamar `POST /callback`.
+4. Sucesso (`2xx`): `sending -> sent`.
+5. Falha: liberar para nova tentativa com retry limitado + backoff; registrar `attempts` e `lastError`. Esgotadas as tentativas, o run fica visível como falha de callback (log + estado).
+6. Um run em `sent` nunca é reenviado automaticamente.
+**Payload com itens `failed`:** o contrato só prevê `price` e `stock`. Itens `failed` são **omitidos** do `result` (não inventar valores) e ficam registrados no estado e nos logs. Na prática, só ocorre com `401`/`404` ou após esgotar retries de `500`.
 
 ## I6. Nenhuma falha silenciosa
 
@@ -418,6 +423,25 @@ Falhas definitivas precisam armazenar pelo menos:
 
 Nenhum item pode simplesmente desaparecer da fila sem estado final conhecido.
 
+## I7. Registro tardio do run
+
+`POST /process` pode chegar **antes** de o `total` do `/burst` ser persistido (a plataforma começa a enviar assim que responde ao `/burst`).
+ 
+- `/process` **nunca** rejeita um `run_id` desconhecido; cria o item normalmente.
+- O `total` é gravado quando o `/burst` retorna (`registerRun`), podendo ocorrer depois de vários itens já terem chegado ou até concluído.
+- A verificação de conclusão do run roda em **dois eventos**: (1) quando um item é resolvido; (2) quando o `total` é registrado.
+- Enquanto `total` for `null`, o run nunca é considerado completo.
+
+
+## I8 — Run travado (stalled)
+
+Se o run tiver `total` conhecido e, após `RUN_STALL_TIMEOUT_MS` (sugestão: 60 000 ms) sem nova mensagem ou conclusão, ainda faltarem `seq`:
+ 
+- o run vira `stalled`;
+- os `seq` ausentes são logados com `run_id` e lista de lacunas;
+- **não** é enviado callback parcial (alinhado a I5 e ao AGENTS);
+- uma mensagem tardia que chegue depois reabre o run para avaliação normal.
+
 ---
 
 # 12. Modelo de estado esperado
@@ -427,12 +451,19 @@ Nenhum item pode simplesmente desaparecer da fila sem estado final conhecido.
 Campos conceituais mínimos:
 
 ```ts
-{
+Run {
   runId: string
-  total: number
-  callbackSent: boolean
-  createdAt: Date
-  completedAt?: Date
+  total: number | null          // null até o /burst ser registrado
+  registeredAt?: Date           // quando o total foi conhecido
+  firstMessageAt?: Date
+  lastMessageAt?: Date
+  status: 'open' | 'completing' | 'completed' | 'stalled'
+  callback: {
+    status: 'pending' | 'sending' | 'sent'
+    attempts: number
+    lastError?: string
+    sentAt?: Date
+  }
 }
 ```
 
@@ -501,6 +532,11 @@ A implementação só deve ser considerada pronta quando:
 - [ ] testes cobrem idempotência, concorrência, retry e consolidação;
 - [ ] README explica como executar localmente;
 - [ ] relatório da melhor execução foi salvo para a entrega.
+- [ ] `/process` aceita `run_id` ainda não registrado e o item é concluído normalmente
+- [ ] `total` registrado depois de todos os itens concluírem ainda dispara o callback
+- [ ] callback com falha HTTP é reenviado com limite e não duplica quando bem-sucedido
+- [ ] run com `seq` ausente após o timeout vira `stalled`, sem callback parcial
+- [ ] simulador da plataforma cobre duplicata, desordem, `429`, `500`, `404` e callback
 
 ---
 

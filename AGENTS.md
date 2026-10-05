@@ -34,7 +34,7 @@ Use esta stack salvo decisão registrada em `docs/decisions.md`:
 - Zod para validação;
 - BullMQ para fila;
 - Redis para fila, idempotência e estado transitório da execução;
-- cliente HTTP explícito para integração com Weduu (ex.: `fetch` nativo ou Axios, escolher um só);
+- cliente HTTP explícito para integração com Weduu **`fetch` nativo** (decisão no ADR-008).;
 - Vitest para testes;
 - Docker Compose para dependências locais, especialmente Redis.
 
@@ -48,6 +48,11 @@ Evite adicionar bibliotecas quando a plataforma padrão do Node resolve de forma
 src/
   server.ts
   app.ts
+
+  scripts/
+    mock-platform.ts     # plataforma falsa: register/burst/enrich/callback + relatório
+    register.ts          # POST /register real
+    burst.ts             # POST /burst real + registerRun(total)
 
   config/
     env.ts
@@ -217,6 +222,9 @@ Ao criar jobs de SKU:
 - retry precisa ser limitado;
 - não remover falhas sem antes persistir/registrar o estado final;
 - worker deve usar concorrência compatível com o limite global de 3.
+- `jobId` não pode conter `:`; usar `<run_id>_<seq>`. A chave lógica de idempotência continua `run_id:seq` no estado do item (ADR-002).
+- Não depender só do `jobId` para deduplicar; o estado do item é a fonte de verdade.
+- Worker de enrich roda em **um único processo** (ADR-003).
 
 Se a implementação usar mais de um worker/processo, o limitador de 3 deve continuar sendo global. Não assumir que `concurrency: 3` em cada processo satisfaz o requisito.
 
@@ -385,6 +393,7 @@ Agentes devem preferir tarefas pequenas e verificáveis nesta ordem:
 4. `POST /process` com validação e ACK;
 5. Redis/BullMQ;
 6. idempotência `run_id:seq`;
+6.5 simulador da plataforma (`scripts/mock-platform.ts`) e harness de testes de integração
 7. cliente Weduu;
 8. worker de enrich;
 9. limite global de concorrência 3;
@@ -394,7 +403,7 @@ Agentes devem preferir tarefas pequenas e verificáveis nesta ordem:
 13. agregação/completude;
 14. callback;
 15. testes de corrida/duplicata;
-16. scripts de register/burst ou comandos de apoio;
+16. scripts de register/burst reais (o `burst` também registra o `total` do run).
 17. Docker/README;
 18. executar lote real e guardar relatório.
 
