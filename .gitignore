@@ -5,3 +5,4 @@ coverage/
 *.log
 reports/*
 !reports/.gitkeep
+!reports/best-execution.json

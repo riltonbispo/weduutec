@@ -56,6 +56,13 @@ export async function ensureSkuJob(queue: SkuQueueWriter, data: SkuJobData): Pro
   }
 
   if ((await job.getState()) === 'failed') {
-    await job.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
+    try {
+      await job.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
+    } catch (error) {
+      const currentState = await job.getState();
+      if (currentState === 'failed' || currentState === 'unknown') {
+        throw error;
+      }
+    }
   }
 }

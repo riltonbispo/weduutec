@@ -34,8 +34,8 @@
 
 - A chave lógica é `run_id:seq`, guardada no estado do item (hash no Redis, campo `status`).
 - Ao receber: criar o item com `HSETNX`/script atômico; se já existir, olhar o `status`:
-  - `completed`/`failed`/`processing`: ignorar e responder `200`;
-  - `received`/`queued`: garantir que existe um job executável; se o job estiver `failed`,
+  - `completed`/`failed`: ignorar e responder `200`;
+  - `received`/`queued`/`processing`: garantir que existe um job executável; se o job estiver `failed`,
     recolocá-lo na fila com os contadores do BullMQ reiniciados.
 - O `jobId` é `<run_id>_<seq>` (BullMQ rejeita `:`), servindo como segunda barreira contra duplicata enquanto o job existir.
 - Transição `received -> queued` só depois de o `add` retornar com sucesso.
@@ -93,6 +93,11 @@ terminal.
 **Trade-offs.** Dois contadores de tentativa (retry e rate limit) aumentam um pouco a complexidade, em troca de não sacrificar vazão nem esgotar tentativas por causa de `429`.
 
 **Consequências.** Todo retry é logado com `run_id`, `seq`, `attempt`, `status_code` e `duration_ms`. No BullMQ 6, `RateLimitError` move o job de `active` para `wait` sem passar por `moveToFailed` e, portanto, sem incrementar `job.attemptsMade`; mesmo assim, os contadores do hash do item são a fonte de verdade.
+
+Erros internos inesperados também usam o limite de tentativas do job. Na última tentativa, o worker
+persiste o item como `failed` com a causa prefixada por `internal_error`, registra o número de
+tentativas e reavalia a finalização do run. Se essa persistência não puder ser concluída, uma
+duplicata posterior também inspeciona itens `processing` e recupera o job falho.
 
 ---
 

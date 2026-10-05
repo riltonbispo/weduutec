@@ -71,7 +71,7 @@ export class ProcessMessageService implements ProcessMessageHandler {
         sku: message.sku,
       };
 
-      if (!item.created && item.status !== 'received' && item.status !== 'queued') {
+      if (!item.created && (item.status === 'completed' || item.status === 'failed')) {
         return;
       }
 

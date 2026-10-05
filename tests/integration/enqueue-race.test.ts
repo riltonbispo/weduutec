@@ -11,6 +11,7 @@ import { ProcessMessageService } from '../../src/services/process-message.servic
 import type { ProcessItemRepository } from '../../src/services/process-message.service.js';
 import { createSkuWorker } from '../../src/workers/sku.worker.js';
 import type { SkuWorker } from '../../src/workers/sku.worker.js';
+import type { ItemRepositoryPort } from '../../src/services/enrich-sku.service.js';
 import { createTestRedisConnection } from '../helpers/redis.js';
 
 const TEST_REDIS_URL = process.env.TEST_ENQUEUE_RACE_REDIS_URL ?? 'redis://127.0.0.1:6379/11';
@@ -45,7 +46,7 @@ async function waitForItem(runId: string, seq: number, status: ItemRecord['statu
   throw new Error(`Timed out waiting for ${runId}:${String(seq)} to become ${status}`);
 }
 
-async function startWorker(): Promise<WorkerHarness> {
+async function startWorker(itemRepository?: ItemRepositoryPort): Promise<WorkerHarness> {
   const workerRedis = createWorkerRedisConnection(TEST_REDIS_URL);
   const repositoryRedis = createWorkerRedisConnection(TEST_REDIS_URL);
   const worker = createSkuWorker({
@@ -53,7 +54,7 @@ async function startWorker(): Promise<WorkerHarness> {
     client: {
       enrich: (sku) => Promise.resolve({ sku, price: 10, stock: 1 }),
     },
-    itemRepository: new ItemRepository(repositoryRedis),
+    itemRepository: itemRepository ?? new ItemRepository(repositoryRedis),
     policy: { maxAttempts: 5, maxRateLimitWaits: 20, baseMs: 1, maxMs: 5 },
     random: () => 0,
     logger: { info: vi.fn() },
@@ -140,35 +141,71 @@ describe('enqueue and item-state race recovery', () => {
     await expect(waitForItem(runId, 0, 'completed')).resolves.toMatchObject({ attempts: 1 });
   });
 
-  it("retries a failed job when a duplicate finds its item in 'received'", async () => {
-    const runId = 'run-failed-job-recovery';
+  it.each(['received', 'queued', 'processing'] as const)(
+    "retries a failed job when a duplicate finds its item in '%s'",
+    async (status) => {
+      const runId = `run-failed-job-recovery-${status}`;
+      const jobData = { runId, seq: 0, sku: 'sku-001' };
+      await items.receiveItem(runId, 0, jobData.sku);
+      if (status === 'queued' || status === 'processing') {
+        await items.markQueued(runId, 0);
+      }
+      if (status === 'processing') {
+        await items.markProcessing(runId, 0);
+      }
+      await queue.add('enrich-sku', jobData, { jobId: `${runId}_0`, attempts: 1 });
+
+      const failingRedis = createWorkerRedisConnection(TEST_REDIS_URL);
+      const failingWorker = new Worker<SkuJobData, void>(
+        SKU_QUEUE_NAME,
+        () => Promise.reject(new Error('simulated worker crash')),
+        { connection: failingRedis },
+      );
+      rawWorkers.push({ worker: failingWorker, redis: failingRedis });
+      await failingWorker.waitUntilReady();
+      const failedJob = await queue.getJob(`${runId}_0`);
+      expect(failedJob).toBeDefined();
+      const deadline = Date.now() + 5_000;
+      while ((await failedJob?.getState()) !== 'failed' && Date.now() < deadline) {
+        await delay(10);
+      }
+      expect(await failedJob?.getState()).toBe('failed');
+      await failingWorker.close();
+      await failingRedis.quit();
+      rawWorkers = [];
+
+      const service = new ProcessMessageService(items, queue);
+      await service.process({ run_id: runId, seq: 0, sku: jobData.sku });
+      await startWorker();
+
+      await expect(waitForItem(runId, 0, 'completed')).resolves.toMatchObject({
+        attempts: status === 'processing' ? 2 : 1,
+      });
+    },
+  );
+
+  it('persists an internal error when the worker exhausts its attempts', async () => {
+    const runId = 'run-internal-error';
     const jobData = { runId, seq: 0, sku: 'sku-001' };
     await items.receiveItem(runId, 0, jobData.sku);
-    await queue.add('enrich-sku', jobData, { jobId: `${runId}_0`, attempts: 1 });
+    await items.markQueued(runId, 0);
+    await queue.add('enrich-sku', jobData, { jobId: `${runId}_0`, attempts: 2 });
+    const failingRepository: ItemRepositoryPort = {
+      getItem: (currentRunId, seq) => items.getItem(currentRunId, seq),
+      markProcessing: (currentRunId, seq) => items.markProcessing(currentRunId, seq),
+      completeItem: () => Promise.reject(new Error('simulated persistence failure')),
+      failItem: (currentRunId, seq, data) => items.failItem(currentRunId, seq, data),
+      recordRetry: (currentRunId, seq, data) => items.recordRetry(currentRunId, seq, data),
+    };
 
-    const failingRedis = createWorkerRedisConnection(TEST_REDIS_URL);
-    const failingWorker = new Worker<SkuJobData, void>(
-      SKU_QUEUE_NAME,
-      () => Promise.reject(new Error('simulated worker crash')),
-      { connection: failingRedis },
-    );
-    rawWorkers.push({ worker: failingWorker, redis: failingRedis });
-    await failingWorker.waitUntilReady();
-    const failedJob = await queue.getJob(`${runId}_0`);
-    expect(failedJob).toBeDefined();
-    const deadline = Date.now() + 5_000;
-    while ((await failedJob?.getState()) !== 'failed' && Date.now() < deadline) {
-      await delay(10);
-    }
-    expect(await failedJob?.getState()).toBe('failed');
-    await failingWorker.close();
-    await failingRedis.quit();
-    rawWorkers = [];
+    await startWorker(failingRepository);
 
-    const service = new ProcessMessageService(items, queue);
-    await service.process({ run_id: runId, seq: 0, sku: jobData.sku });
-    await startWorker();
-
-    await expect(waitForItem(runId, 0, 'completed')).resolves.toMatchObject({ attempts: 1 });
+    await expect(waitForItem(runId, 0, 'failed')).resolves.toMatchObject({
+      attempts: 2,
+      errorKind: 'transient',
+      error: 'internal_error: simulated persistence failure',
+    });
+    const completedJob = await queue.getJob(`${runId}_0`);
+    await expect(completedJob?.getState()).resolves.toBe('completed');
   });
 });

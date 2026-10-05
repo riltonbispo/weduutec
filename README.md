@@ -48,7 +48,10 @@ Weduu -> API -> Redis/BullMQ -> worker -> /enrich -> finalizer -> /callback
    npm run status -- <run_id>
    ```
 
-As respostas brutas de callbacks bem-sucedidos ficam em `reports/<run_id>__attempt-<n>.json` ou `.txt`. Para desenvolvimento local também é possível subir apenas a dependência: `docker compose up -d redis`.
+As respostas brutas de callbacks bem-sucedidos ficam em `reports/<run_id>__attempt-<n>.json` ou
+`.txt`. O relatório selecionado para a entrega está em
+[`reports/best-execution.json`](reports/best-execution.json). Para desenvolvimento local também é
+possível subir apenas a dependência: `docker compose up -d redis`.
 
 ## Testes e simulador
 
