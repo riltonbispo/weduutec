@@ -96,11 +96,12 @@
  
 **Contexto.** O callback não pode ser duplicado por corrida (dois itens finais concluindo ao mesmo tempo) nem se perder por falha de rede.
  
-**Decisão.** Estados `pending -> sending -> sent`. O claim `pending -> sending` é atômico (Lua ou `SET NX`). Falha no POST devolve o run a um estado retentável, com backoff e limite de tentativas. Itens `failed` são omitidos do payload e registrados.
+**Decisão.** Estados `open -> sending -> completed`. O claim `open -> sending` é atômico em Lua e concede um lease; falha no POST devolve o run a `open`, com backoff e limite de tentativas. O sweeper usa o mesmo claim e retoma leases expirados, em vez de manter uma segunda fila de callback. Itens `failed` são omitidos do payload e registrados.
  
 **Alternativas consideradas.**
 - Booleano `callbackSent`: marca antes de enviar (perde se falhar) ou depois (permite duplo envio).
 - Enviar callback com `null` nos itens falhos: contraria o contrato (`price`/`stock` numéricos).
+- Fila dedicada de callback: adiciona um segundo mecanismo de recuperação; lease + sweeper já cobrem crash e retry.
 **Trade-offs.** O relatório da plataforma pode apontar itens ausentes quando houver falha definitiva; é o comportamento honesto (sem inventar dados).
  
 **Consequências.** Callbacks concorrentes não geram duplo envio; falha de callback é visível e retentável.
@@ -111,7 +112,7 @@
  
 **Contexto.** Se alguma mensagem nunca chegar, o run nunca completa e não há sinal visível.
  
-**Decisão.** Após `RUN_STALL_TIMEOUT_MS` sem progresso e com lacunas, o run vira `stalled`, as lacunas são logadas e **não há callback parcial**. Mensagem tardia reabre a avaliação.
+**Decisão.** O sweeper detecta, sem escrever no caminho de `/process`, que um run ficou `RUN_STALL_TIMEOUT_MS` sem progresso e ainda tem lacunas. O run vira `stalled`, as lacunas são logadas e **não há callback parcial**. Mensagem tardia reabre a avaliação.
  
 **Alternativas consideradas.**
 - Callback parcial automático: contraria I5 e produz relatório com itens perdidos.
@@ -161,3 +162,17 @@
 **Trade-offs.** Há um processo e conexões Redis adicionais para operar, em troca de isolamento de latência e falhas.
 
 **Consequências.** API e worker devem ser iniciados separadamente (`npm run dev` e `npm run dev:worker`, ou `npm run worker`). O shutdown do worker fecha o consumidor, a fila de controle e todas as conexões Redis de forma graciosa.
+
+---
+
+## ADR-011 — Verificação de completude pela faixa de sequências
+
+**Contexto.** O callback exige que cada `seq` de `0..total-1` esteja resolvido; um contador isolado não prova ausência de lacunas.
+
+**Decisão.** Para os 20 itens do desafio, o script Lua do claim percorre `0..total-1` e consulta o conjunto `run:{runId}:resolved` antes de conceder o lease do callback.
+
+**Alternativas consideradas.** Um contador de itens resolvidos é O(1), mas pode ocultar sequências fora da faixa ou duplicadas sem validações adicionais.
+
+**Trade-offs.** A varredura é O(total) no Redis e bloqueia o servidor durante o script, aceitável para lotes de 20 itens.
+
+**Consequências.** Para 20.000 itens, substituir por contador atômico combinado com validação de faixa no registro e considerar callback em partes, sem perder a checagem explícita de lacunas.
