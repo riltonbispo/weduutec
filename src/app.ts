@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 
 import { registerHealthRoute } from './http/routes/health.route.js';
+import { registerCheckRoute } from './routes/check.route.js';
 
 interface BuildAppOptions {
   logger?: boolean;
@@ -13,6 +14,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
 
   void app.register(registerHealthRoute);
+  void app.register(registerCheckRoute);
 
   return app;
 }
