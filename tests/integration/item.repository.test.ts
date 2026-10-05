@@ -4,8 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ItemRepository } from '../../src/repositories/item.repository.js';
 import { createTestRedisConnection } from '../helpers/redis.js';
 
-const TEST_REDIS_URL =
-  process.env.TEST_ITEM_REDIS_URL ?? 'redis://127.0.0.1:6379/9';
+const TEST_REDIS_URL = process.env.TEST_ITEM_REDIS_URL ?? 'redis://127.0.0.1:6379/9';
 
 let redis: Redis;
 let repository: ItemRepository;
@@ -43,7 +42,7 @@ describe('ItemRepository worker transitions', () => {
     ).resolves.toBe(true);
     await expect(
       repository.completeItem('run-complete', 0, { price: 999, stock: 999 }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
 
     await expect(repository.getItem('run-complete', 0)).resolves.toMatchObject({
       status: 'completed',

@@ -26,9 +26,7 @@ function item(overrides: Partial<ItemRecord> = {}): ItemRecord {
 
 function createDependencies(currentItem = item()): ProcessSkuJobDependencies {
   const client: EnrichClientPort = {
-    enrich: vi.fn(() =>
-      Promise.resolve({ sku: JOB.data.sku, price: 19.99, stock: 8 }),
-    ),
+    enrich: vi.fn(() => Promise.resolve({ sku: JOB.data.sku, price: 19.99, stock: 8 })),
   };
   const itemRepository: ItemRepositoryPort = {
     getItem: vi.fn(() => Promise.resolve(currentItem)),
@@ -45,6 +43,7 @@ function createDependencies(currentItem = item()): ProcessSkuJobDependencies {
     random: () => 0.5,
     rateLimit: vi.fn(() => Promise.resolve()),
     logger: { info: vi.fn() },
+    finalizeRun: vi.fn(() => Promise.resolve()),
   };
 }
 

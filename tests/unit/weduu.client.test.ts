@@ -176,9 +176,7 @@ describe('WeduuClient retry-after parsing', () => {
     const retryAt = new Date(now + 5_000).toUTCString();
     vi.spyOn(Date, 'now').mockReturnValue(now);
     const fetchImpl: typeof fetch = () =>
-      Promise.resolve(
-        jsonResponse({ error: 'rate_limited' }, 429, { 'retry-after': retryAt }),
-      );
+      Promise.resolve(jsonResponse({ error: 'rate_limited' }, 429, { 'retry-after': retryAt }));
     const client = new WeduuClient({ ...BASE_OPTIONS, fetchImpl });
 
     const error = await expectEnrichError(client.enrich('sku-001'));
@@ -201,9 +199,7 @@ describe('WeduuClient request and concurrency', () => {
 
     await client.enrich(sku);
 
-    expect(capturedUrl).toBe(
-      'https://platform.example.test/api/enrich/sku%20%2F%3F%23%C3%A7',
-    );
+    expect(capturedUrl).toBe('https://platform.example.test/api/enrich/sku%20%2F%3F%23%C3%A7');
     expect(capturedHeaders.get('x-cid')).toBe('cid-test');
     expect(capturedHeaders.get('x-token')).toBe('token-secret');
   });
@@ -266,5 +262,79 @@ describe('WeduuClient request and concurrency', () => {
     await Promise.all([client.enrich('first'), client.enrich('second')]);
 
     expect(signalWasAbortedAtStart).toEqual([false, false]);
+  });
+});
+
+describe('WeduuClient callback', () => {
+  it('posts the callback contract without acquiring an enrich slot', async () => {
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const fetchImpl: typeof fetch = (input, init) => {
+      capturedUrl = inputUrl(input);
+      capturedInit = init;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    };
+    const client = new WeduuClient({ ...BASE_OPTIONS, callbackTimeoutMs: 2_000, fetchImpl });
+    await client.sendCallback({
+      runId: 'run-1',
+      result: [{ seq: 0, sku: 'sku-001', price: 10, stock: 2 }],
+    });
+
+    expect(capturedUrl).toBe('https://platform.example.test/api/callback');
+    expect(new Headers(capturedInit?.headers).get('x-token')).toBe('token-secret');
+    expect(new Headers(capturedInit?.headers).get('content-type')).toBe('application/json');
+    if (typeof capturedInit?.body !== 'string') throw new Error('Expected a string callback body');
+    expect(JSON.parse(capturedInit.body)).toEqual({
+      cid: 'cid-test',
+      run_id: 'run-1',
+      result: [{ seq: 0, sku: 'sku-001', price: 10, stock: 2 }],
+    });
+  });
+
+  it.each([
+    [500, 'transient'],
+    [503, 'transient'],
+    [400, 'permanent'],
+    [401, 'permanent'],
+  ] as const)('classifies callback HTTP %i as %s', async (status, kind) => {
+    const client = new WeduuClient({
+      ...BASE_OPTIONS,
+      fetchImpl: () => Promise.resolve(new Response('failure', { status })),
+    });
+    const error = await expectEnrichError(client.sendCallback({ runId: 'run-1', result: [] }));
+    expect(error).toMatchObject({ kind, statusCode: status });
+  });
+
+  it.each(['TimeoutError', 'AbortError'])('classifies callback %s as transient', async (name) => {
+    const source = new Error('failed');
+    source.name = name;
+    const client = new WeduuClient({
+      ...BASE_OPTIONS,
+      fetchImpl: () => Promise.reject(source),
+    });
+    const error = await expectEnrichError(client.sendCallback({ runId: 'run-1', result: [] }));
+    expect(error).toMatchObject({ kind: 'transient', message: 'callback_timeout', cause: source });
+  });
+
+  it('does not wait for enrich semaphore slots', async () => {
+    const enrichResolvers: (() => void)[] = [];
+    const fetchImpl: typeof fetch = (input) => {
+      if (inputUrl(input).endsWith('/callback')) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return new Promise<Response>((resolve) => {
+        enrichResolvers.push(() => {
+          resolve(jsonResponse({ sku: requestedSku(input), price: 1, stock: 1 }));
+        });
+      });
+    };
+    const client = new WeduuClient({ ...BASE_OPTIONS, fetchImpl, maxInFlight: 3 });
+    const enrichments = ['a', 'b', 'c'].map((sku) => client.enrich(sku));
+    await vi.waitFor(() => {
+      expect(enrichResolvers).toHaveLength(3);
+    });
+    await expect(client.sendCallback({ runId: 'run-1', result: [] })).resolves.toBeUndefined();
+    for (const resolve of enrichResolvers) resolve();
+    await Promise.all(enrichments);
   });
 });
