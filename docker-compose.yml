@@ -12,5 +12,31 @@ services:
       timeout: 1s
       retries: 10
 
+  api:
+    build: .
+    command: npm run start
+    ports:
+      - '4000:4000'
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: npm run start:worker
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   redis-data:

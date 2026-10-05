@@ -7,7 +7,11 @@ const envSchema = z.object({
 });
 
 const responseSchema = z.object({ cid: z.string().min(1), token: z.string().min(1) });
-const env = envSchema.parse(process.env);
+const env = envSchema.parse({
+  ...process.env,
+  WEBHOOK_URL: process.argv[2] ?? process.env.WEBHOOK_URL,
+  REGISTER_NAME: process.argv[3] ?? process.env.REGISTER_NAME,
+});
 const baseUrl = env.WEDUU_BASE_URL.endsWith('/') ? env.WEDUU_BASE_URL : `${env.WEDUU_BASE_URL}/`;
 const response = await fetch(new URL('register', baseUrl), {
   method: 'POST',
