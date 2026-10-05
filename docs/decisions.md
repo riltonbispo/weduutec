@@ -45,14 +45,14 @@
  
 **Contexto.** A API aceita no máximo 3 requisições simultâneas e responde `429` acima disso. O limite vale para o cliente como um todo, não por run.
  
-**Decisão.** Um único processo worker com `concurrency: 3` na fila de enrich. Se for necessário mais de um processo, usar o limite global de concorrência da fila (confirmar suporte na versão) ou um semáforo distribuído no Redis.
+**Decisão.** Um único processo worker com `concurrency: 3` na fila de enrich. A fila também configura `globalConcurrency: 3`, recurso disponível no BullMQ 6 instalado. A instância singleton de `WeduuClient` impõe `maxInFlight: 3` com um semáforo FIFO em memória, como defesa em profundidade contra chamadas que contornem acidentalmente a concorrência do worker.
  
 **Alternativas consideradas.**
 - `concurrency: 3` por processo em N processos: viola o limite global.
 - `p-limit` dentro de um job único que processa o lote inteiro: perde a granularidade de retry por item.
 **Trade-offs.** Throughput limitado a ~3 itens por ~0,6 s (≈ 5 itens/s). É exatamente o teto imposto pela API, então não há ganho em paralelizar mais.
  
-**Consequências.** O teste de concorrência deve medir chamadas **em voo** (contador de pico no simulador), não só o total.
+**Consequências.** O teste de concorrência deve medir chamadas **em voo** (contador de pico no simulador), não só o total. O semáforo do cliente protege uma única instância/processo; preservar o cliente como singleton é obrigatório e múltiplos processos continuam exigindo um limitador distribuído.
  
 ---
  
@@ -64,7 +64,7 @@
  
 | Resposta | Classe | Ação |
 |---|---|---|
-| `429` | `rate_limited` | Respeitar `retry-after` sem ocupar slot (rate limit do worker ou re-agendamento com delay); não consome tentativas de `500`; teto próprio de esperas |
+| `429` | `rate_limited` | `worker.rateLimit(retryAfterMs)` seguido de `Worker.RateLimitError()`; não consome tentativas de `500`; teto próprio de esperas persistido no hash |
 | `500`, timeout, erro de rede | `transient` | Até 5 tentativas, backoff exponencial (base 500 ms) + jitter |
 | `401`, `404` | `permanent` | Sem retry; item `failed` com causa e tentativas |
 | `200` com corpo inválido | `permanent` | Validar o corpo com Zod; nunca marcar `completed` sem dados válidos |
@@ -73,7 +73,7 @@
  
 **Trade-offs.** Dois contadores de tentativa (retry e rate limit) aumentam um pouco a complexidade, em troca de não sacrificar vazão nem esgotar tentativas por causa de `429`.
  
-**Consequências.** Todo retry é logado com `run_id`, `seq`, `attempt`, `status_code` e `duration_ms`.
+**Consequências.** Todo retry é logado com `run_id`, `seq`, `attempt`, `status_code` e `duration_ms`. No BullMQ 6, `RateLimitError` move o job de `active` para `wait` sem passar por `moveToFailed` e, portanto, sem incrementar `job.attemptsMade`; mesmo assim, os contadores do hash do item são a fonte de verdade.
  
 ---
  
@@ -147,3 +147,17 @@
 **Trade-offs.** Custo inicial de escrever o simulador, pago por testes de integração confiáveis e iteração rápida.
  
 **Consequências.** Os critérios de aceite de concorrência, duplicata e callback viram testes automatizados.
+
+---
+
+## ADR-010 — Worker em processo separado da API
+
+**Contexto.** O endpoint `/process` precisa manter o ACK abaixo de 600 ms, enquanto o enrich pode levar segundos, sofrer retry e bloquear durante shutdown.
+
+**Decisão.** A API HTTP e o worker BullMQ usam entrypoints e processos separados. Cada processo mantém suas próprias conexões Redis; o worker usa conexões sem os timeouts curtos do caminho de ACK. O worker cria uma única instância de `WeduuClient`, usa `concurrency: 3` e configura a concorrência global da fila em 3.
+
+**Alternativas consideradas.** Executar o worker no mesmo processo Fastify simplificaria o boot local, mas faria carga, falhas e shutdown do enrich competirem com o caminho de ACK.
+
+**Trade-offs.** Há um processo e conexões Redis adicionais para operar, em troca de isolamento de latência e falhas.
+
+**Consequências.** API e worker devem ser iniciados separadamente (`npm run dev` e `npm run dev:worker`, ou `npm run worker`). O shutdown do worker fecha o consumidor, a fila de controle e todas as conexões Redis de forma graciosa.

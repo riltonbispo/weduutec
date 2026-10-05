@@ -17,3 +17,10 @@ export function createRedisConnection(
     retryStrategy: () => 50,
   });
 }
+
+export function createWorkerRedisConnection(redisUrl: string): Redis {
+  return new Redis(redisUrl, {
+    lazyConnect: true,
+    maxRetriesPerRequest: null,
+  });
+}

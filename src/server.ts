@@ -9,7 +9,7 @@ try {
     commandTimeoutMs: env.REDIS_COMMAND_TIMEOUT_MS,
     connectTimeoutMs: env.REDIS_CONNECT_TIMEOUT_MS,
   });
-  const queue = createSkuQueue(redis);
+  const queue = createSkuQueue(redis, { maxAttempts: env.ENRICH_MAX_ATTEMPTS });
   const app = buildApp({ redis, queue, logLevel: env.LOG_LEVEL });
   let shutdownPromise: Promise<void> | undefined;
 

@@ -22,3 +22,13 @@ curl -X POST http://localhost:5000/burst/<cid> \
 ```
 
 As opções do simulador podem ser alteradas por `MOCK_PORT`, `TOTAL`, `DUP_RATE`, `ERROR_RATE`, `SEED`, `DROP_SEQS`, `INVALID_SKU_SEQS` e `EARLY_DISPATCH`. Relatórios de callback são gravados em `reports/`.
+
+## Rodando o worker
+
+O worker de enrich roda em um processo separado da API. Com `REDIS_URL`, `WEDUU_BASE_URL`, `WEDUU_CID` e `WEDUU_TOKEN` configurados no ambiente, execute:
+
+```bash
+npm run dev:worker
+```
+
+Para uma execução sem watch, use `npm run worker`. A API continua sendo iniciada separadamente com `npm run dev`.
