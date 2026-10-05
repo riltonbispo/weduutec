@@ -23,8 +23,21 @@ export interface WeduuClientOptions {
   cid: string;
   token: string;
   timeoutMs: number;
+  callbackTimeoutMs?: number;
   maxInFlight?: number;
   fetchImpl?: typeof fetch;
+}
+
+export interface CallbackItem {
+  seq: number;
+  sku: string;
+  price: number;
+  stock: number;
+}
+
+export interface CallbackPayload {
+  runId: string;
+  result: CallbackItem[];
 }
 
 function enrichUrl(baseUrl: string, sku: string): string {
@@ -101,6 +114,7 @@ export class WeduuClient {
   private readonly cid: string;
   private readonly token: string;
   private readonly timeoutMs: number;
+  private readonly callbackTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly semaphore: Semaphore;
 
@@ -113,6 +127,10 @@ export class WeduuClient {
     this.cid = options.cid;
     this.token = options.token;
     this.timeoutMs = options.timeoutMs;
+    this.callbackTimeoutMs = options.callbackTimeoutMs ?? 10_000;
+    if (!Number.isInteger(this.callbackTimeoutMs) || this.callbackTimeoutMs < 1) {
+      throw new Error('callbackTimeoutMs must be a positive integer');
+    }
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.semaphore = new Semaphore(options.maxInFlight ?? 3);
   }
@@ -176,6 +194,38 @@ export class WeduuClient {
       });
     } finally {
       this.semaphore.release();
+    }
+  }
+
+  async sendCallback(payload: CallbackPayload): Promise<void> {
+    try {
+      const normalizedBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`;
+      const response = await this.fetchImpl(new URL('callback', normalizedBaseUrl), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-token': this.token,
+        },
+        body: JSON.stringify({ cid: this.cid, run_id: payload.runId, result: payload.result }),
+        signal: AbortSignal.timeout(this.callbackTimeoutMs),
+      });
+      await cancelResponseBody(response);
+      if (response.ok) return;
+      throw new EnrichError({
+        kind: response.status >= 500 ? 'transient' : 'permanent',
+        statusCode: response.status,
+        message: response.status >= 500 ? 'callback_upstream_error' : 'callback_rejected',
+      });
+    } catch (error) {
+      if (error instanceof EnrichError) throw error;
+      throw new EnrichError({
+        kind: 'transient',
+        message:
+          error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+            ? 'callback_timeout'
+            : 'callback_network_error',
+        cause: error,
+      });
     }
   }
 }

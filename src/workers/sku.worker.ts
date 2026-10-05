@@ -22,6 +22,7 @@ export interface CreateSkuWorkerOptions {
   random: () => number;
   logger: EnrichLogger;
   lockDurationMs: number;
+  finalizeRun: (runId: string) => Promise<unknown>;
 }
 
 export function createSkuWorker(options: CreateSkuWorkerOptions): SkuWorker {
@@ -39,6 +40,7 @@ export function createSkuWorker(options: CreateSkuWorkerOptions): SkuWorker {
           await worker.rateLimit(delayMs);
         },
         logger: options.logger,
+        finalizeRun: options.finalizeRun,
       });
     },
     {

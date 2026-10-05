@@ -88,10 +88,7 @@ return 0
 
 const COMPLETE_ITEM_SCRIPT = `
 local status = redis.call('HGET', KEYS[1], 'status')
-if status == 'completed' then
-  return 1
-end
-if status == false or status == 'failed' then
+if status == false or status == 'completed' or status == 'failed' then
   return 0
 end
 
@@ -103,15 +100,19 @@ redis.call('HSET', KEYS[1],
   'completed_at', ARGV[3],
   'attempts', attempts
 )
+redis.call('SADD', KEYS[2], ARGV[4])
+redis.call('HSET', KEYS[3], 'last_progress_at', ARGV[5])
+if redis.call('HGET', KEYS[3], 'status') == 'stalled' then
+  redis.call('HSET', KEYS[3], 'status', 'open')
+  redis.call('HDEL', KEYS[3], 'last_error')
+end
+redis.call('SADD', KEYS[4], ARGV[6])
 return 1
 `;
 
 const FAIL_ITEM_SCRIPT = `
 local status = redis.call('HGET', KEYS[1], 'status')
-if status == 'failed' then
-  return 1
-end
-if status == false or status == 'completed' then
+if status == false or status == 'completed' or status == 'failed' then
   return 0
 end
 
@@ -127,6 +128,13 @@ if ARGV[3] == '' then
 else
   redis.call('HSET', KEYS[1], 'status_code', ARGV[3])
 end
+redis.call('SADD', KEYS[2], ARGV[6])
+redis.call('HSET', KEYS[3], 'last_progress_at', ARGV[7])
+if redis.call('HGET', KEYS[3], 'status') == 'stalled' then
+  redis.call('HSET', KEYS[3], 'status', 'open')
+  redis.call('HDEL', KEYS[3], 'last_error')
+end
+redis.call('SADD', KEYS[4], ARGV[8])
 return 1
 `;
 
@@ -200,6 +208,14 @@ export function itemKey(runId: string, seq: number): string {
   return `item:${runId}:${String(seq)}`;
 }
 
+function resolvedKey(runId: string): string {
+  return `run:${runId}:resolved`;
+}
+
+function runKey(runId: string): string {
+  return `run:${runId}`;
+}
+
 function isItemStatus(value: unknown): value is ItemStatus {
   return typeof value === 'string' && ITEM_STATUSES.has(value);
 }
@@ -227,6 +243,54 @@ function parseBooleanResult(result: unknown, operation: string): boolean {
 
 function optionalStatusCode(statusCode: number | undefined): string {
   return statusCode === undefined ? '' : String(statusCode);
+}
+
+function parseItemHash(hash: unknown, runId: string, seq: number): ItemRecord | null {
+  const hashRecord = z.record(z.string()).safeParse(hash);
+  if (!hashRecord.success) {
+    throw new Error('Redis returned an invalid item hash');
+  }
+  if (Object.keys(hashRecord.data).length === 0) {
+    return null;
+  }
+
+  const parsed = itemHashSchema.safeParse(hashRecord.data);
+  if (!parsed.success) {
+    throw new Error(`Redis returned an invalid item: ${parsed.error.message}`);
+  }
+
+  const item = parsed.data;
+  if (item.run_id !== runId || item.seq !== seq) {
+    throw new Error('Redis returned an item with a mismatched identity');
+  }
+  const lastError =
+    item.last_error === undefined || item.last_error_kind === undefined
+      ? undefined
+      : {
+          message: item.last_error,
+          kind: item.last_error_kind,
+          statusCode: item.last_status_code,
+        };
+
+  return {
+    runId: item.run_id,
+    seq: item.seq,
+    sku: item.sku,
+    status: item.status,
+    receivedAt: item.received_at,
+    queuedAt: item.queued_at,
+    startedAt: item.started_at,
+    completedAt: item.completed_at,
+    lastAttemptAt: item.last_attempt_at,
+    price: item.price,
+    stock: item.stock,
+    attempts: item.attempts,
+    rateLimitWaits: item.rate_limit_waits,
+    error: item.error,
+    errorKind: item.error_kind,
+    statusCode: item.status_code,
+    lastError,
+  };
 }
 
 export class ItemRepository {
@@ -269,28 +333,42 @@ export class ItemRepository {
   }
 
   async completeItem(runId: string, seq: number, data: CompleteItemData): Promise<boolean> {
+    const now = Date.now();
     const result: unknown = await this.redis.eval(
       COMPLETE_ITEM_SCRIPT,
-      1,
+      4,
       itemKey(runId, seq),
+      resolvedKey(runId),
+      runKey(runId),
+      'runs:open',
       String(data.price),
       String(data.stock),
-      new Date().toISOString(),
+      new Date(now).toISOString(),
+      String(seq),
+      String(now),
+      runId,
     );
 
     return parseBooleanResult(result, 'completeItem');
   }
 
   async failItem(runId: string, seq: number, data: FailItemData): Promise<boolean> {
+    const now = Date.now();
     const result: unknown = await this.redis.eval(
       FAIL_ITEM_SCRIPT,
-      1,
+      4,
       itemKey(runId, seq),
+      resolvedKey(runId),
+      runKey(runId),
+      'runs:open',
       data.message,
       data.kind,
       optionalStatusCode(data.statusCode),
       String(data.attempts),
-      new Date().toISOString(),
+      new Date(now).toISOString(),
+      String(seq),
+      String(now),
+      runId,
     );
 
     return parseBooleanResult(result, 'failItem');
@@ -314,51 +392,51 @@ export class ItemRepository {
 
   async getItem(runId: string, seq: number): Promise<ItemRecord | null> {
     const hash: unknown = await this.redis.hgetall(itemKey(runId, seq));
-    const hashRecord = z.record(z.string()).safeParse(hash);
-    if (!hashRecord.success) {
-      throw new Error('Redis returned an invalid item hash');
-    }
-    if (Object.keys(hashRecord.data).length === 0) {
-      return null;
-    }
+    return parseItemHash(hash, runId, seq);
+  }
 
-    const parsed = itemHashSchema.safeParse(hashRecord.data);
-    if (!parsed.success) {
-      throw new Error(`Redis returned an invalid item: ${parsed.error.message}`);
+  async getItems(runId: string, seqs: readonly number[]): Promise<(ItemRecord | null)[]> {
+    if (seqs.length === 0) return [];
+    const pipeline = this.redis.pipeline();
+    for (const seq of seqs) pipeline.hgetall(itemKey(runId, seq));
+    const result: unknown = await pipeline.exec();
+    if (!Array.isArray(result) || result.length !== seqs.length) {
+      throw new Error('Redis returned an invalid item pipeline result');
     }
+    return result.map((entry, index) => {
+      const seq = seqs[index];
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        throw new Error('Redis returned an invalid item pipeline entry');
+      }
+      if (entry[0] !== null) {
+        throw entry[0] instanceof Error ? entry[0] : new Error('Redis item pipeline failed');
+      }
+      return parseItemHash(entry[1], runId, seq);
+    });
+  }
 
-    const item = parsed.data;
-    if (item.run_id !== runId || item.seq !== seq) {
-      throw new Error('Redis returned an item with a mismatched identity');
-    }
-    const lastError =
-      item.last_error === undefined || item.last_error_kind === undefined
-        ? undefined
-        : {
-            message: item.last_error,
-            kind: item.last_error_kind,
-            statusCode: item.last_status_code,
-          };
-
-    return {
-      runId: item.run_id,
-      seq: item.seq,
-      sku: item.sku,
-      status: item.status,
-      receivedAt: item.received_at,
-      queuedAt: item.queued_at,
-      startedAt: item.started_at,
-      completedAt: item.completed_at,
-      lastAttemptAt: item.last_attempt_at,
-      price: item.price,
-      stock: item.stock,
-      attempts: item.attempts,
-      rateLimitWaits: item.rate_limit_waits,
-      error: item.error,
-      errorKind: item.error_kind,
-      statusCode: item.status_code,
-      lastError,
-    };
+  async listRunItemSeqs(runId: string): Promise<number[]> {
+    const prefix = `item:${runId}:`;
+    let cursor = '0';
+    const seqs = new Set<number>();
+    do {
+      const result: unknown = await this.redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100);
+      if (
+        !Array.isArray(result) ||
+        result.length !== 2 ||
+        typeof result[0] !== 'string' ||
+        !Array.isArray(result[1])
+      ) {
+        throw new Error('Redis returned an invalid item scan result');
+      }
+      cursor = result[0];
+      for (const key of result[1]) {
+        if (typeof key !== 'string' || !key.startsWith(prefix)) continue;
+        const rawSeq = key.slice(prefix.length);
+        if (/^\d+$/.test(rawSeq)) seqs.add(Number(rawSeq));
+      }
+    } while (cursor !== '0');
+    return [...seqs].sort((left, right) => left - right);
   }
 
   async getStatus(runId: string, seq: number): Promise<ItemStatus | null> {

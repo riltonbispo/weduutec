@@ -46,6 +46,7 @@ export interface ProcessSkuJobDependencies {
   random: () => number;
   rateLimit: (delayMs: number) => Promise<void>;
   logger: EnrichLogger;
+  finalizeRun: (runId: string) => Promise<unknown>;
 }
 
 function isTerminal(item: ItemRecord): boolean {
@@ -84,16 +85,14 @@ function logAttempt(
   );
 }
 
-export async function processSkuJob(
-  job: SkuJob,
-  deps: ProcessSkuJobDependencies,
-): Promise<void> {
+export async function processSkuJob(job: SkuJob, deps: ProcessSkuJobDependencies): Promise<void> {
   const { runId, seq, sku } = job.data;
   const item = await deps.itemRepository.getItem(runId, seq);
   if (item === null) {
     throw new Error(`Item ${runId}:${String(seq)} does not exist`);
   }
   if (isTerminal(item)) {
+    await deps.finalizeRun(runId);
     return;
   }
 
@@ -116,6 +115,7 @@ export async function processSkuJob(
       throw new Error(`Item ${runId}:${String(seq)} could not be marked completed`);
     }
     logAttempt(deps, job.data, attempt, startedAt, 'success', 'completed');
+    await deps.finalizeRun(runId);
   } catch (error) {
     if (!(error instanceof EnrichError)) {
       logAttempt(deps, job.data, attempt, startedAt, 'internal', 'error');
@@ -141,6 +141,7 @@ export async function processSkuJob(
         throw new Error(`Item ${runId}:${String(seq)} could not be marked failed`);
       }
       logAttempt(deps, job.data, attempt, startedAt, error.kind, 'fail', error.statusCode);
+      await deps.finalizeRun(runId);
       return;
     }
 
@@ -166,15 +167,7 @@ export async function processSkuJob(
       throw new Error(`Rate-limit wait for item ${runId}:${String(seq)} could not be recorded`);
     }
     await deps.rateLimit(decision.delayMs);
-    logAttempt(
-      deps,
-      job.data,
-      attempt,
-      startedAt,
-      error.kind,
-      'rate_limit_wait',
-      error.statusCode,
-    );
+    logAttempt(deps, job.data, attempt, startedAt, error.kind, 'rate_limit_wait', error.statusCode);
     throw Worker.RateLimitError();
   }
 }
