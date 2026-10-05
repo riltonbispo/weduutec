@@ -46,12 +46,18 @@ function finalizer(
   return new RunFinalizer({
     runs,
     callbackService: new CallbackService(runs, items, logger),
-    client: { sendCallback },
+    client: {
+      async sendCallback(payload) {
+        await sendCallback(payload);
+        return { statusCode: 200, body: '{"ok":true}' };
+      },
+    },
     leaseMs: 100,
     backoffBaseMs: 10,
     random: () => 0,
     now,
     logger,
+    reportWriter: () => Promise.resolve('/tmp/callback-report.json'),
   });
 }
 

@@ -272,13 +272,15 @@ describe('WeduuClient callback', () => {
     const fetchImpl: typeof fetch = (input, init) => {
       capturedUrl = inputUrl(input);
       capturedInit = init;
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(new Response('{"accepted":true}', { status: 201 }));
     };
     const client = new WeduuClient({ ...BASE_OPTIONS, callbackTimeoutMs: 2_000, fetchImpl });
-    await client.sendCallback({
-      runId: 'run-1',
-      result: [{ seq: 0, sku: 'sku-001', price: 10, stock: 2 }],
-    });
+    await expect(
+      client.sendCallback({
+        runId: 'run-1',
+        result: [{ seq: 0, sku: 'sku-001', price: 10, stock: 2 }],
+      }),
+    ).resolves.toEqual({ statusCode: 201, body: '{"accepted":true}' });
 
     expect(capturedUrl).toBe('https://platform.example.test/api/callback');
     expect(new Headers(capturedInit?.headers).get('x-token')).toBe('token-secret');
@@ -333,7 +335,10 @@ describe('WeduuClient callback', () => {
     await vi.waitFor(() => {
       expect(enrichResolvers).toHaveLength(3);
     });
-    await expect(client.sendCallback({ runId: 'run-1', result: [] })).resolves.toBeUndefined();
+    await expect(client.sendCallback({ runId: 'run-1', result: [] })).resolves.toEqual({
+      statusCode: 204,
+      body: '',
+    });
     for (const resolve of enrichResolvers) resolve();
     await Promise.all(enrichments);
   });

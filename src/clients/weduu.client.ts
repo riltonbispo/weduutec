@@ -40,6 +40,11 @@ export interface CallbackPayload {
   result: CallbackItem[];
 }
 
+export interface CallbackResponse {
+  statusCode: number;
+  body: string;
+}
+
 function enrichUrl(baseUrl: string, sku: string): string {
   const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
   return new URL(`enrich/${encodeURIComponent(sku)}`, normalizedBaseUrl).toString();
@@ -197,7 +202,7 @@ export class WeduuClient {
     }
   }
 
-  async sendCallback(payload: CallbackPayload): Promise<void> {
+  async sendCallback(payload: CallbackPayload): Promise<CallbackResponse> {
     try {
       const normalizedBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`;
       const response = await this.fetchImpl(new URL('callback', normalizedBaseUrl), {
@@ -209,8 +214,8 @@ export class WeduuClient {
         body: JSON.stringify({ cid: this.cid, run_id: payload.runId, result: payload.result }),
         signal: AbortSignal.timeout(this.callbackTimeoutMs),
       });
-      await cancelResponseBody(response);
-      if (response.ok) return;
+      const body = await response.text();
+      if (response.ok) return { statusCode: response.status, body };
       throw new EnrichError({
         kind: response.status >= 500 ? 'transient' : 'permanent',
         statusCode: response.status,

@@ -1,7 +1,11 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { EnrichError } from '../../src/domain/errors.js';
-import { RunFinalizer } from '../../src/services/run-finalizer.service.js';
+import { RunFinalizer, writeCallbackReport } from '../../src/services/run-finalizer.service.js';
 import type {
   CallbackBuilderPort,
   CallbackClientPort,
@@ -25,7 +29,13 @@ function setup(claim: Awaited<ReturnType<FinalizerRunRepositoryPort['claimCallba
     ),
     getFailedCount: () => 1,
   };
-  const client: CallbackClientPort = { sendCallback: vi.fn(() => Promise.resolve()) };
+  const client: CallbackClientPort = {
+    sendCallback: vi.fn(() =>
+      Promise.resolve({ statusCode: 200, body: '{"status":"received"}' }),
+    ),
+  };
+  const reportWriter = vi.fn(() => Promise.resolve('/tmp/run-1__attempt-1.json'));
+  const logger = { info: vi.fn(), error: vi.fn() };
   const finalizer = new RunFinalizer({
     runs,
     callbackService,
@@ -34,9 +44,10 @@ function setup(claim: Awaited<ReturnType<FinalizerRunRepositoryPort['claimCallba
     backoffBaseMs: 1_000,
     random: () => 0.5,
     now: () => 10_000,
-    logger: { info: vi.fn(), error: vi.fn() },
+    logger,
+    reportWriter,
   });
-  return { finalizer, runs, callbackService, client };
+  return { finalizer, runs, callbackService, client, reportWriter, logger };
 }
 
 describe('RunFinalizer', () => {
@@ -53,7 +64,26 @@ describe('RunFinalizer', () => {
     const context = setup({ claimed: true, attempt: 1 });
     await expect(context.finalizer.finalize('run-1')).resolves.toBe('sent');
     expect(context.client.sendCallback).toHaveBeenCalledOnce();
+    expect(context.reportWriter).toHaveBeenCalledWith(
+      'run-1',
+      1,
+      { statusCode: 200, body: '{"status":"received"}' },
+      expect.any(String),
+    );
     expect(context.runs.markCallbackSent).toHaveBeenCalledWith('run-1', 10_000);
+  });
+
+  it('marks the callback sent even when saving the response fails', async () => {
+    const context = setup({ claimed: true, attempt: 1 });
+    context.reportWriter.mockRejectedValue(new Error('disk full'));
+
+    await expect(context.finalizer.finalize('run-1')).resolves.toBe('sent');
+
+    expect(context.runs.markCallbackSent).toHaveBeenCalledWith('run-1', 10_000);
+    expect(context.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ run_id: 'run-1', error: 'disk full' }),
+      'failed to save callback response',
+    );
   });
 
   it('schedules a transient failure with injected backoff and clock', async () => {
@@ -92,5 +122,26 @@ describe('RunFinalizer', () => {
       'run-1',
       expect.objectContaining({ error: 'Redis pipeline failed', forceFailed: false }),
     );
+  });
+});
+
+describe('writeCallbackReport', () => {
+  it.each([
+    ['JSON', '{"ok":true}', 'json'],
+    ['text', 'accepted', 'txt'],
+  ])('stores a raw %s response with the matching extension', async (_kind, body, extension) => {
+    const directory = await mkdtemp(join(tmpdir(), 'weduutec-report-'));
+    try {
+      const filePath = await writeCallbackReport(
+        'run/unsafe',
+        2,
+        { statusCode: 200, body },
+        directory,
+      );
+      expect(filePath).toBe(join(directory, `run_unsafe__attempt-2.${extension}`));
+      await expect(readFile(filePath, 'utf8')).resolves.toBe(body);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
