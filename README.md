@@ -20,6 +20,7 @@ Weduu -> API -> Redis/BullMQ -> worker -> /enrich -> finalizer -> /callback
 
    ```bash
    cp .env.example .env
+   npm ci
    docker compose up --build -d
    ```
 
@@ -50,8 +51,28 @@ Weduu -> API -> Redis/BullMQ -> worker -> /enrich -> finalizer -> /callback
 
 As respostas brutas de callbacks bem-sucedidos ficam em `reports/<run_id>__attempt-<n>.json` ou
 `.txt`. O relatório selecionado para a entrega está em
-[`reports/best-execution.json`](reports/best-execution.json). Para desenvolvimento local também é
-possível subir apenas a dependência: `docker compose up -d redis`.
+[`reports/best-execution.json`](reports/best-execution.json).
+
+Para executar API e worker localmente, depois de preencher as credenciais no `.env`, suba apenas o
+Redis e use dois terminais:
+
+```bash
+docker compose up -d redis
+```
+
+```bash
+# Terminal 1
+npm run dev
+
+# Terminal 2
+npm run dev:worker
+```
+
+Ao terminar, encerre os containers sem remover o volume persistente do Redis:
+
+```bash
+docker compose down
+```
 
 ## Testes e simulador
 
@@ -63,6 +84,8 @@ npm ci
 npm test
 npm run typecheck
 npm run lint
+npm run build
+npm run format:check
 ```
 
 O simulador determinístico da plataforma roda com:
