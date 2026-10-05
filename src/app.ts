@@ -2,9 +2,14 @@ import Fastify from 'fastify';
 
 import { registerHealthRoute } from './http/routes/health.route.js';
 
-export function buildApp() {
+interface BuildAppOptions {
+  logger?: boolean;
+  logLevel?: string;
+}
+
+export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
-    logger: true,
+    logger: options.logger === false ? false : { level: options.logLevel ?? 'info' },
   });
 
   void app.register(registerHealthRoute);
